@@ -1,0 +1,344 @@
+---
+title: "Predicting Bank Term Deposit Subscription"
+author: "Muhamad Ilyas Haikal"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: cosmo
+    highlight: tango
+    toc: true
+    number_section: false
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+    df_print: paged
+---
+
+```{r options_pkgs, echo=F, warning=F, message=F, results=F}
+# knitr::opts_chunk$set(error = F, message = F, # tidy = T,
+#                       cache = T, warning = T, 
+#                       results = 'hide', # suppress code output
+#                       echo = F,         # suppress code
+#                       fig.show = 'hide' # suppress plots
+#                       )
+library(tidyverse)
+library(e1071)
+library(caret)
+library(ROCR)
+library(partykit)
+library(rsample)
+library(randomForest)
+```
+
+# 1. Background
+
+## Introduction 
+Marketing to potential clients has always been a crucial challenge in achieving success for banking institutions. It’s not a surprise that banks usually deploy mediums such as social media, customer service, digital media, and strategic partnerships to reach out to customers. But how can banks market to a specific location, demographic, and society with increased accuracy? With the inception of machine learning, reaching out to specific groups of people has been revolutionized by using data and analytics to provide detailed strategies to inform banks which customers are more likely to subscribe to a financial product. In this project on bank marketing with machine learning, I will explain how a particular Portuguese bank can use predictive analytics from data science to help prioritize customers who would subscribe to a bank deposit.
+
+The data set is based on the direct marketing campaigns of a Portuguese banking institution. These marketing campaigns were based on phone calls. More than one contact with a client was required in order to know if the product (a bank term deposit) was subscribed by a client or not. The classification goal is to predict if a client will subscribe to the bank's term deposit (yes or no).
+
+The dataset contains 21 columns, including the output (y). I am going to discard the output column and use the remaining columns to find the most relatable independent variables (x) that will be able to predict if a customer will subscribe to a bank deposit or not.
+
+# 2. Data Wrangling 
+## 2.1 Data Inspection
+```{r}
+bank <- read.csv("bank-full.csv", 
+                 sep = ";",
+                 stringsAsFactors = T)
+head(bank)
+```
+
+```{r}
+# Check data types
+glimpse(bank)
+```
+Here are some informations about the features:
+
+- age: client’s age
+- job : type of job
+- marital : marital status
+- education: client’s last education
+- default: does the client have credit in default?
+- balance: average yearly balance, in euros
+- housing: has housing loan?
+- loan: does he client have personal loan?
+- contact: contact communication type
+- day: last contact day of the month
+- month: last contact month of year
+- duration: last contact duration, in seconds
+- campaign: number of contacts performed during this campaign and for this client
+- pdays: number of days that passed by after the client was last contacted from a previous campaign (-1 means client was not previously contacted)
+- previous: number of contacts performed before this campaign and for this client
+- poutcome: outcome of the previous marketing campaign
+- y: has the client subscribed a term deposit?
+
+We can see that there are 45.211 instances and 17 features in this dataset. Most of the features are categorical. We can see using glimpse(), all the data types are correct. However, there are some “unknowns” in the data. I will consider this as missing value. Let’s first check whether the data has missing and duplicated values.
+
+## 2.2 Missing and Duplicated Values
+Replacing “unknowns” with NA, then checking whether the data has any missing values.
+
+```{r}
+bank <- bank %>% 
+  mutate(across(.cols = everything(),
+                .fns = ~replace(., . == "unknown", NA)))
+
+colSums(is.na(bank))
+```
+The "contact" and "poutcome" variables have a significant number of missing values. In fact, the majority of values in "poutcome" are unknown. Therefore, I will remove these variables from the analysis. I am also concerned about the "day" and "month" features because there is no information indicating whether the data was collected in the same year or not. If the data was collected in different years, these features would be meaningless since the exact dates are not provided. Hence, I will also exclude the "day" and "month" variables. Additionally, the "job" and "education" variables have some missing values, but they account for less than 5% of the total data. Therefore, I will only drop the observations that contain missing values in these two features.
+
+```{r}
+bank <- bank %>% 
+  select(-c(contact, poutcome, day, month)) %>% 
+  drop_na()
+```
+We have cleaned the missing values, let’s now check whether the data has any duplicated value. Systematically, in a dataset like this, I do not think that duplicated values should exist. Considering that there are features measuring the balance and number of days passed after the last campaign in the data, I personally think that every observation should have unique values.
+```{r}
+sum(duplicated(bank))
+```
+The data only has 1 duplicated value. I will just remove it.
+```{r}
+bank <- bank[!duplicated(bank), ]
+```
+
+## 2.3 Near Zero Variance
+We will also check if there are any features that have almost no variance. Those features should be removed as they are not informative and will not contribute significantly during model construction. This represents the final cleaned data.
+
+```{r}
+bank <- bank[, -nearZeroVar(bank)]
+bank
+```
+
+# 3. Class Balance and Cross Validation
+We want our target variable to have balanced class proportion so that the model could classify well on all classes instead of only the majority class. Let’s first check on the class proportion.
+
+```{r}
+prop.table(table(bank$y))
+```
+```{r}
+table(bank$y)
+```
+We have a moderate class imbalance, which poses a problem as proceeding with our data may result in a model that performs well only on one class. First, let's split the data into an 80% train set and a 20% test set. The train set will be used for constructing the model, while the test set will be used to measure the out-of-sample accuracy.
+```{r}
+set.seed(100)
+bank_split <- initial_split(bank, prop = 0.8, strata = "y")
+train <- training(bank_split)
+test <- testing(bank_split)
+```
+Rechecking the class proportion in the train set.
+```{r}
+prop.table(table(train$y))
+```
+```{r}
+table(train$y)
+```
+Before proceeding to the modeling part, we need to handle the class imbalance. There are a few techniques that we can use: upsampling, downsampling, SMOTE, etc. Considering there are quite a lot of observations in the data, I will proceed to use downsampling to handle class imbalance. The method will remove some observations in the majority class, and will result in using 8,032 data for training the model.
+```{r}
+train_down <- downSample(x = train[, -13], 
+                         y = train$y,
+                         yname = "y")
+
+table(train_down$y)
+
+```
+We are done with pre-processing the data. Now we can use it to construct and evaluate classifiers.
+
+# 4. Naive Bayes Classifier
+Naive Bayes is a simple technique for constructing classifiers by applying Bayes' theorem to data features. It relies on a strong assumption that all features in the dataset are equally important and independent. In real-world data, this assumption is likely to be violated. However, despite the violation, the Naive Bayes Classifier can still produce excellent results. I will construct a Naive Bayes Classifier with Laplace smoothing, as a precautionary measure in case there are predictors that never occur in a class.
+
+```{r}
+model_nb <- naiveBayes(y ~ ., data = train_down, laplace = 1)
+
+conf_nb <- confusionMatrix(data = predict(model_nb, newdata = test),
+                           reference = test$y,
+                           positive = "yes")
+conf_nb
+```
+We can see that Naive Bayes Classifier has 81.38% accuracy. For this data, the false negative and false positive case would be:
+
+  - False Negative: clients who will subscribe to a term deposit is predicted to be not willing to subscribe.
+  - False Positive: clients who will not subscribe to a term deposit is predicted to be willing to subscribe.
+
+Deciding which case would be more severe to the bank is beyond my expertise. Feel free to decide which case is more severe, thus deciding which metric in the confusion matrix to be the most important. For now, I will use the ROC and AUC to see how good the model is at distinguishing binary classes.
+
+```{r}
+nb_rocr <- prediction(predictions = predict(model_nb, newdata = test, type = "raw")[, 2],
+                      labels = test$y,
+                      label.ordering = c("no", "yes"))
+
+plot(performance(nb_rocr,
+                 measure = "tpr",
+                 x.measure = "fpr"))
+```
+```{r}
+# AUC
+performance(nb_rocr, "auc")@y.values
+```
+The problem about Naive Bayes classifier is that we can only tune the cutoff for the model. Doing so might lead to an increase in a metric listed in confusion matrix, with a tradeoff of a decrease in the other metric. However, the AUC value (which measures how good the model is at distinguishing classes) will not change. Let’s see the accuracy, recall, precision, and for different cutoffs.
+
+```{r}
+pred_prob_nb <- predict(model_nb, newdata = test, type = "raw")
+```
+
+```{r}
+metrics <- function(cutoff){
+  prediction <- as.factor(ifelse(pred_prob_nb[, 2] > cutoff, "yes", "no"))
+  conf <- confusionMatrix(prediction, 
+                          reference = test$y,
+                          positive = "yes")
+  res <- c(conf$overall[1], conf$byClass[1], conf$byClass[2], conf$byClass[3])
+  return(res)
+}
+```
+
+```{r}
+cutoffs <- seq(0.01, 0.99, length = 99)
+result <- matrix(nrow = 99, ncol = 4)
+
+for(i in 1:99){
+  result[i, ] <- metrics(cutoffs[i])
+}
+
+result <- as.data.frame(result) %>% 
+  rename(Accuracy = V1,
+         Recall = V2,
+         Specifity = V3,
+         Precision = V4) %>% 
+  mutate(Cutoff = cutoffs)
+```
+
+```{r}
+result %>% 
+  gather(key = "metrics", value = "value", -Cutoff) %>% 
+  ggplot(mapping = aes(x = Cutoff,
+                       y = value,
+                       col = metrics)) +
+  geom_line(lwd = 1) +
+  labs(title = "Metrics for Different Cutoffs",
+       y = "Value") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        legend.title = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+Once again, feel free to decide on the most optimum cutoff. Personally, I don't believe focusing on precision is worthwhile as the peak precision is below 50%. Therefore, I would suggest focusing on the other three metrics or considering the use of another classifier.
+
+# 5. Decision Tree Classifier
+The decision tree is likely one of the most popular machine learning methods for classification tasks. Unlike Naive Bayes, a decision tree generates output in the form of rules, making it easily understandable by humans and applicable to various scenarios. Let's start by building a decision tree classifier with the default options.
+
+```{r}
+model_dt <- ctree(y ~ ., data = train_down)
+model_dt
+```
+```{r}
+plot(model_dt, type = "simple")
+```
+It seems like the decision tree model is too complex. It is understandable though, since our data has many features. Let’s see the accuracy on both training and test set.
+
+```{r}
+# Confusion matrix for training set
+confusionMatrix(data = predict(model_dt, newdata = train_down, type = "response"),
+                reference = train_down$y,
+                positive = "yes")
+```
+```{r}
+# Confusion matrix for test set
+conf_dt <- confusionMatrix(data = predict(model_dt, newdata = test, type = "response"),
+                           reference = test$y,
+                           positive = "yes")
+conf_dt
+```
+Upon examining the differences between the training set and testing set, I don't believe the model is overfit. When comparing the confusion matrix of the decision tree model and Naive Bayes, it is evident that the decision tree model, despite having slightly lower accuracy, may still outperform Naive Bayes due to its higher recall and specificity. Even if we were to adjust the cutoff for Naive Bayes to achieve similar accuracy and specificity, its sensitivity would still be considerably lower than that of the decision tree model. Let's proceed to analyze the ROC curve and AUC of the decision tree model.
+
+```{r}
+dt_rocr <- prediction(predictions = predict(model_dt, newdata = test, type = "prob")[, 2],
+                      labels = test$y,
+                      label.ordering = c("no", "yes"))
+
+plot(performance(dt_rocr,
+                 measure = "tpr",
+                 x.measure = "fpr"))
+```
+```{r}
+# AUC
+performance(dt_rocr, "auc")@y.values
+```
+
+As we can observe, the decision tree model has an AUC of approximately 0.863. This indicates that the decision tree outperforms Naive Bayes in distinguishing between the two classes. The decision tree can be fine-tuned by adjusting parameters such as mincriterion, minsplit, and minbucket within its control parameter. However, considering that finding the best combination for these parameters would require numerous iterations, I will temporarily skip this step. Furthermore, the model does not exhibit signs of overfitting and demonstrates a reasonably good AUC. For now, let's move on to the last classifier, random forest.
+
+# 6. Random Forest Classifier
+Random forests is an ensemble learning method known for its versatility and performance. A random forest consists of many decision trees. Those decision trees were constructed using different observations based on the sampling, thus it have different characteristics. The prediction gained in random forest is average of all the predictions from these different decision trees. First, let’s set the random forest control so it uses 5 fold cross validation with 3 iterations.
+
+```{r}
+# The model was made using this code
+
+ set.seed(100)
+ ctrl <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+ model_rf <- train(y ~., data = train_down, method = "rf", trControl = ctrl)
+```
+
+```{r}
+# read model from RDS file
+# model_rf <- readRDS("model/fb_forest.RDS")
+# model_rf
+```
+
+Checking the final random forest model.
+```{r}
+model_rf$finalModel
+```
+```{r}
+plot(model_rf)
+```
+The random forest has Out of Bag error rate of 19.4%. Looking the confusion matrix for both training and test set.
+
+```{r}
+confusionMatrix(data = predict(model_rf, newdata = train_down),
+                reference = train_down$y,
+                positive = "yes")
+```
+
+
+```{r}
+conf_rf <- confusionMatrix(data = predict(model_rf, newdata = test),
+                           reference = test$y,
+                           positive = "yes")
+conf_rf
+```
+
+```{r}
+#code here
+pred_rf <- predict(object = model_rf, newdata = test ,type="raw")
+```
+
+Turns out that the random forest classifier is overfitting. The accuracy and metrics for the training set is perfect, but for the test set, the accuracy is only about 70%, with decent recall and specificity, but poor precision. Let’s see the ROC and AUC.
+
+```{r}
+rf_rocr <- prediction(predictions = predict(model_rf, newdata = test, type = "prob")$yes,
+                      labels = test$y,
+                      label.ordering = c("no", "yes"))
+
+plot(performance(rf_rocr, 
+                 measure = "tpr",
+                 x.measure = "fpr"))
+```
+```{r}
+# AUC
+performance(rf_rocr, "auc")@y.values
+```
+The random forest model’s ability to distinguish classes is slightly higher than of decision tree’s, with AUC value of 0.8737
+
+```{r}
+varImp(model_rf)
+```
+We can also see using variable importance, that the most significant variable is duration (last contact duration, in seconds), followed by balance and age. It may be reasonable since longer duration during contacting clients might imply that the client is interested with the offer.
+
+# 7. Conclusion
+We can conclude that naive bayes classifier, despite having the highest accuracy, is the worst at distinguishing classes (although the difference is not really significant). Random forest performance is similar to decision tree. Random forest seems to be able to distinguish whether the bank clients will subscribe to a term deposit or not slightly better than decision tree. However, considering how interpretable and adaptable decision tree is, it is better to use decision tree rather than random forest classifier. Looking at the variable importance of random forest model, it can be seen that the most significant feature for detecting customer’s choice in subscribing term deposit is the contact duration. Longer contact duration might imply that the client is interested in the bank institutions’ offers.
+
+
+
+
+
+
+
