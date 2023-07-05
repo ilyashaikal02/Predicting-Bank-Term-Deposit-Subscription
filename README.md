@@ -1,7 +1,8 @@
 # Predicting-Bank-Term-Deposit-Subscription
-
+Link Rpubs : https://rpubs.com/Ilyashaikall/PredictingBankTermDepositSubscription
 
 Introduction
+
 Marketing to potential clients has always been a crucial challenge in achieving success for banking institutions. It’s not a surprise that banks usually deploy mediums such as social media, customer service, digital media, and strategic partnerships to reach out to customers. But how can banks market to a specific location, demographic, and society with increased accuracy? With the inception of machine learning, reaching out to specific groups of people has been revolutionized by using data and analytics to provide detailed strategies to inform banks which customers are more likely to subscribe to a financial product. In this project on bank marketing with machine learning, I will explain how a particular Portuguese bank can use predictive analytics from data science to help prioritize customers who would subscribe to a bank deposit.
 
 The data set is based on the direct marketing campaigns of a Portuguese banking institution. These marketing campaigns were based on phone calls. More than one contact with a client was required in order to know if the product (a bank term deposit) was subscribed by a client or not. The classification goal is to predict if a client will subscribe to the bank’s term deposit (yes or no).
